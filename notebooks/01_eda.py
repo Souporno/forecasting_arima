@@ -20,12 +20,20 @@ from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 
-FIG_DIR = os.path.join(os.path.dirname(__file__), "..", "results", "figures")
+# Works both as a script (__file__ defined) and inside a Jupyter kernel
+# (__file__ undefined - falls back to the notebook's working directory,
+# which Jupyter sets to the folder the .ipynb lives in, i.e. notebooks/).
+try:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    BASE_DIR = os.getcwd()
+
+FIG_DIR = os.path.join(BASE_DIR, "..", "results", "figures")
 os.makedirs(FIG_DIR, exist_ok=True)
 
 # %% Load
 df = pd.read_csv(
-    os.path.join(os.path.dirname(__file__), "..", "data", "people_analytics_monthly.csv"),
+    os.path.join(BASE_DIR, "..", "data", "people_analytics_monthly.csv"),
     parse_dates=["Date"],
 )
 df = df.set_index("Date").asfreq("MS")
