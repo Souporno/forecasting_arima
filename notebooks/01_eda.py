@@ -17,7 +17,7 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 from statsmodels.tsa.seasonal import seasonal_decompose
-from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.stattools import adfuller, kpss
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 
 # Works both as a script (__file__ defined) and inside a Jupyter kernel
@@ -61,7 +61,7 @@ print("Saved decomposition plots - check the 'seasonal' panel: is there a repeat
       "check 'resid': is what's left over roughly noise, or does it still show the 2009/2020 dips?")
 
 
-# %% Stationarity: Augmented Dickey-Fuller
+# %% Stationarity: Augmented Dickey-Fuller (H0 = has a unit root / non-stationary)
 def run_adf(series, label):
     result = adfuller(series.dropna())
     print(f"\nADF test - {label}")
@@ -70,9 +70,32 @@ def run_adf(series, label):
     print(f"  -> {'STATIONARY (reject H0)' if result[1] < 0.05 else 'NOT stationary (fail to reject H0)'} at 5%")
 
 
+# Stationarity: KPSS (H0 = series IS stationary - the opposite null of ADF).
+# Run both: if they agree, easy call. If they disagree (commonly ADF says
+# stationary but KPSS says not), that usually flags trend-stationarity -
+# stationary around a deterministic trend rather than a pure random walk -
+# which means detrending is the right fix, not differencing.
+def run_kpss(series, label, regression="c"):
+    stat, p_value, lags, crit = kpss(series.dropna(), regression=regression, nlags="auto")
+    print(f"\nKPSS test - {label} (regression='{regression}')")
+    print(f"  KPSS statistic: {stat:.4f}")
+    print(f"  p-value:        {p_value:.4f}  (statsmodels clips this to [0.01, 0.10])")
+    print(f"  -> {'NOT stationary (reject H0)' if p_value < 0.05 else 'STATIONARY (fail to reject H0)'} at 5%")
+
+
+print("=" * 60)
+print("ADF tests")
+print("=" * 60)
 run_adf(df["Headcount"], "Headcount (raw)")
 run_adf(df["Headcount"].diff(), "Headcount (1st difference)")
 run_adf(df["Attrition_Rate_Pct"], "Attrition_Rate_Pct (raw)")
+
+print("\n" + "=" * 60)
+print("KPSS tests (cross-check against ADF above)")
+print("=" * 60)
+run_kpss(df["Headcount"], "Headcount (raw)")
+run_kpss(df["Headcount"].diff(), "Headcount (1st difference)")
+run_kpss(df["Attrition_Rate_Pct"], "Attrition_Rate_Pct (raw)")
 
 # %% ACF / PACF - guides ARIMA (p, d, q) later
 fig, axes = plt.subplots(2, 2, figsize=(11, 7))
