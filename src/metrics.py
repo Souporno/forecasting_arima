@@ -1,37 +1,52 @@
 """
-Shared forecast-accuracy metrics, used from Phase 2 onward so every method
-(AR, MA, ARIMA, and anything added later) is scored the same way and results
-are directly comparable in results/model_comparison.csv.
+src/metrics.py
+
+Shared evaluation helpers used by every forecasting notebook from Phase 2
+onward, so every method (moving average, exponential smoothing, AR/MA/ARIMA,
+SARIMA) is scored the same way and results are directly comparable in
+Phase 5's final table.
 """
 import numpy as np
+import pandas as pd
 
 
 def mae(y_true, y_pred):
     """Mean Absolute Error - average size of the miss, in the original units
-    (e.g. 'on average we're off by 1.3 percentage points of attrition')."""
-    y_true, y_pred = np.asarray(y_true), np.asarray(y_pred)
+    (e.g. 'off by 6.3 people' or 'off by 0.8 percentage points')."""
+    y_true, y_pred = np.asarray(y_true, dtype=float), np.asarray(y_pred, dtype=float)
     return float(np.mean(np.abs(y_true - y_pred)))
 
 
 def rmse(y_true, y_pred):
-    """Root Mean Squared Error - same units as MAE, but squares errors before
-    averaging, so big misses are punished disproportionately more than small
-    ones. RMSE >> MAE for the same model usually means a few large misses
-    (e.g. right at a shock) rather than uniformly-mediocre misses."""
-    y_true, y_pred = np.asarray(y_true), np.asarray(y_pred)
+    """Root Mean Squared Error - like MAE but squares errors before averaging,
+    so a few big misses hurt the score more than many small ones."""
+    y_true, y_pred = np.asarray(y_true, dtype=float), np.asarray(y_pred, dtype=float)
     return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
 
 def mape(y_true, y_pred):
-    """Mean Absolute Percentage Error - MAE expressed as a % of the actual
-    value, so it's comparable across series of different scale (e.g. compare
-    error on Headcount, in the hundreds, against error on Attrition_Rate_Pct,
-    in single digits). Undefined / unstable if y_true has values near 0."""
-    y_true, y_pred = np.asarray(y_true), np.asarray(y_pred)
-    return float(np.mean(np.abs((y_true - y_pred) / y_true)) * 100)
+    """Mean Absolute Percentage Error - error as a % of the actual value, so
+    it's comparable across series with different scales (Headcount vs a %
+    rate). Unstable when y_true is near zero (Attrition_Rate_Pct hits 0.0 in
+    a few months) - those months are excluded from the denominator."""
+    y_true, y_pred = np.asarray(y_true, dtype=float), np.asarray(y_pred, dtype=float)
+    mask = y_true != 0
+    if not mask.any():
+        return float("nan")
+    return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
 
 
-def summarize(y_true, y_pred, label=""):
-    m = {"model": label, "MAE": mae(y_true, y_pred), "RMSE": rmse(y_true, y_pred), "MAPE_%": mape(y_true, y_pred)}
-    print(f"{label:>20s}  MAE={m['MAE']:.4f}  RMSE={m['RMSE']:.4f}  MAPE={m['MAPE_%']:.2f}%")
-    return m
+def evaluate(y_true, y_pred, label=None):
+    """Return a one-row dict of all three metrics, ready to append into a
+    comparison DataFrame."""
+    row = {"MAE": mae(y_true, y_pred), "RMSE": rmse(y_true, y_pred), "MAPE_%": mape(y_true, y_pred)}
+    if label is not None:
+        row = {"Method": label, **row}
+    print(f"{label or '':>28s}  MAE={row['MAE']:.4f}  RMSE={row['RMSE']:.4f}  MAPE={row['MAPE_%']:.2f}%")
+    return row
+
+
+def comparison_table(rows):
+    """rows: list of dicts from evaluate(). Returns a DataFrame sorted best
+    (lowest RMSE) first."""
+    return pd.DataFrame(rows).sort_values("RMSE").reset_index(drop=True)
