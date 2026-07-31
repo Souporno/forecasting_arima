@@ -60,11 +60,13 @@ print(f"test:  {test.index.min().date()} to {test.index.max().date()}  ({len(tes
 # model beaten by naive isn't learning anything useful from the data.
 naive_preds = {col: df[col].shift(1) for col in TARGETS}
 
-print("Naive forecast preview - the forecast column is just Headcount shifted down 1 row:")
-print(pd.DataFrame({
-    "Headcount (actual)": df["Headcount"],
-    "Naive forecast (= prior month's actual)": naive_preds["Headcount"],
-}).head(6))
+print("Naive forecast preview - the forecast column is just each column shifted down 1 row:")
+for col in TARGETS:
+    print(f"\n{col}:")
+    print(pd.DataFrame({
+        f"{col} (actual)": df[col],
+        "Naive forecast (= prior month's actual)": naive_preds[col],
+    }).head(6))
 
 # %% Method 2 - Simple moving average (rolling one-step), window sweep
 # shift(1) first (don't peek at the value we're trying to predict), then
@@ -76,11 +78,13 @@ sma_preds = {
 }
 
 print("SMA preview (rows 10-17) - each forecast = average of the previous w actual months:")
-print(pd.DataFrame({
-    "Headcount (actual)": df["Headcount"],
-    "SMA(3) forecast": sma_preds["Headcount"][3],
-    "SMA(12) forecast": sma_preds["Headcount"][12],
-}).iloc[10:18])
+for col in TARGETS:
+    print(f"\n{col}:")
+    print(pd.DataFrame({
+        f"{col} (actual)": df[col],
+        "SMA(3) forecast": sma_preds[col][3],
+        "SMA(12) forecast": sma_preds[col][12],
+    }).iloc[10:18])
 
 # %% Method 3 - Weighted moving average (rolling one-step)
 # Same idea as SMA, but recent months count more. Weights [1, 2, ..., w]
@@ -101,11 +105,13 @@ def weighted_moving_average(series, window):
 wma_preds = {col: weighted_moving_average(df[col], WMA_WINDOW) for col in TARGETS}
 
 print(f"WMA preview (rows 10-17) - recent months of the last {WMA_WINDOW} count more than older ones:")
-print(pd.DataFrame({
-    "Headcount (actual)": df["Headcount"],
-    f"SMA({WMA_WINDOW}) forecast (equal weights, for contrast)": sma_preds["Headcount"][6],
-    f"WMA({WMA_WINDOW}) forecast (recent-weighted)": wma_preds["Headcount"],
-}).iloc[10:18])
+for col in TARGETS:
+    print(f"\n{col}:")
+    print(pd.DataFrame({
+        f"{col} (actual)": df[col],
+        f"SMA({WMA_WINDOW}) forecast (equal weights, for contrast)": sma_preds[col][6],
+        f"WMA({WMA_WINDOW}) forecast (recent-weighted)": wma_preds[col],
+    }).iloc[10:18])
 
 # %% Evaluate every method on the test period
 rows = []
