@@ -210,6 +210,10 @@ Because `data/generate_dataset.py` is the actual ground-truth generator, this ca
 
 Every model through Phase 4 is *univariate* — each only ever sees a target's own past values, nothing else. The general name for using other variables as predictors too is **multivariate time series forecasting**. The direct extension of what's built here is **SARIMAX with exogenous regressors** (sometimes called ARIMAX, or "dynamic regression with ARIMA errors") — the same `SARIMAX` class already in use, just fed extra columns (e.g. `Hires`, `Open_Requisitions`) alongside a target's own lags. A related but different tool is **VAR (Vector Autoregression)**, which models several series jointly rather than treating others as fixed external inputs — each series forecast from lagged values of itself *and* all the others simultaneously. Worth checking before reaching for either: in this generator, `Avg_Engagement_Score` and `Avg_Satisfaction_Score` are actually *derived from* `Attrition_Rate_Pct` in the same period (`engagement = 3.6 - 0.18 × z_attr + ...`), so they wouldn't be legitimate predictors — using them would be somewhat circular. `Hires` and `Open_Requisitions`, by contrast, are genuinely causally downstream of terminations (more people leaving → more hiring needed → more open reqs) and haven't been tried as exogenous predictors at all — an untested, real stretch goal. (Multivariate time series forecasting is conceptually related to, but distinct from, **Structural Equation Modeling (SEM)** from the social sciences — both model systems of interrelated variables, and Structural VAR specifically borrows SEM's idea of hypothesized directional restrictions between variables, but SEM is built for testing a cross-sectional causal theory, often with latent constructs, not for time-lag dynamics or forecasting. The closer time-series analog of SEM's latent-variable flavor is a **Dynamic Factor Model**.)
 
+### Rolling-origin backtesting — testing on many windows instead of trusting one
+
+Every result through Phase 4 was graded against exactly one train/test split, so every "method X beat method Y" conclusion was only ever shown to be true for that one specific slice of history. Rolling-origin (walk-forward) backtesting fixes that: slide the train/test boundary forward repeatedly through the data (here, 6 "origins," each training on an expanding window and testing on the next 12 months, walking through 2020-2025 one year at a time), re-run every method at every origin, and average the results — a method's final score reflects how it *typically* performs, not how it happened to do on one particular window. `09_backtest_rmse_by_origin.png` is about *consistency*: each line is one method's RMSE at each of the 6 origins, so a flat line means steady performance every year, a spiky one means a method that's great some years and bad others even if its average looks fine. `10_backtest_leaderboard.png` is the final ranked answer: mean RMSE per method (bars, shortest/best at top) with error bars showing standard deviation across the 6 origins — short bar *and* short error bar is the real, reliable winner.
+
 ## 5. Methodology / roadmap
 
 **Phase 1 — EDA & stationarity** (`notebooks/01_eda.ipynb`, done)
@@ -245,7 +249,23 @@ Full leaderboard, results/figures: `results/metrics_phase5_backtest_detail.csv` 
 **Phase 6 — Stretch goals**
 Prophet or a simple LSTM as an outside comparison; anomaly/changepoint detection to auto-flag the 2009/2020 shocks; a small Streamlit app to interactively forecast N months ahead; GitHub Actions to re-run the notebook on push.
 
-## 6. Repo structure
+## 6. Findings — which model won, and why
+
+The honest final answer comes from Phase 5's backtest, not any single phase in isolation - a method that looked like a runaway winner on one test window doesn't necessarily hold up once it's checked against several. Restricting to the fair, apples-to-apples comparison group (methods evaluated the same way - fit once, forecast blind; see "Rolling-origin backtesting" above for why Naive/SMA/WMA are excluded from this specific ranking):
+
+![Phase 5 backtest leaderboard - mean RMSE per method per target, with std-dev error bars](results/figures/10_backtest_leaderboard.png)
+
+**`Headcount` -> SARIMAX wins.** Adding a seasonal layer on top of ARIMA was the single biggest jump in accuracy anywhere in this project - Phase 4's single test window put its RMSE at 3.02 (vs. 25.83 for plain ARIMA), and Phase 5's 6-origin backtest confirms SARIMAX as the champion, though its *typical* performance (RMSE 6.43, averaged across origins) is more modest than that one standout window suggested. **Why it wins**: `Headcount` has real, confirmed structure to exploit - a genuine long-run growth trend (Phase 1's decomposition) and a real 12-month seasonal cycle that Phase 4's SARIMAX specifically targets with seasonal differencing, which plain ARIMA has no mechanism to represent at all. Every phase's added sophistication (Phase 3's trend term, Phase 4's seasonal term) bought real, compounding accuracy here, taking RMSE from 34.43 (Phase 2's static baseline) down to single digits.
+
+**`Attrition_Rate_Pct` -> SES (Simple Exponential Smoothing) wins.** Not `auto_arima`, despite `auto_arima` winning Phase 4's single test window outright (RMSE 0.643) - averaged across Phase 5's 6 origins, `auto_arima` drops to third place (RMSE 0.923), and the simplest method in the entire project, plain SES (RMSE 0.867), comes out on top. **Why it wins**: `Attrition_Rate_Pct` doesn't have much real structure to exploit in the first place. Checking the actual data generator (`data/generate_dataset.py`) confirms this directly rather than just inferring it - each month's termination count is a Poisson random draw around a real but small underlying rate curve, meaning a genuine, provable noise floor sits on top of whatever real seasonal/trend signal exists (see "Attrition's noise floor is provable" above). Every method tried across three entire phases converged to roughly the same ~0.64-0.9 RMSE range, which is itself evidence there's a hard ceiling here that no amount of added model sophistication can push through - and on a series that noisy, extra model complexity (more seasonal terms, more searched parameters) has more opportunity to overfit to noise in the training window than to find real signal, which is exactly why the *simplest* method ends up winning once tested broadly instead of on one window.
+
+![RMSE per origin, top methods per target - shows consistency across the 6 rolling test years](results/figures/09_backtest_rmse_by_origin.png)
+
+This second chart is why the backtest result is trusted over any single phase's number: it shows each top method's RMSE *at every one of the 6 origins* (2020 through 2025), not just the average. A method that's merely lucky on one window shows up here as a spike that doesn't repeat; a genuinely reliable method shows a flatter, more consistent line across years. SARIMAX's real advantage on `Headcount`, and the crowded, close-together noise floor on `Attrition_Rate_Pct`, are both visible directly in how these lines behave year to year, not just in their averages.
+
+**The overall takeaway**, holding across every phase of this project: sophistication pays off exactly in proportion to how much real, exploitable structure exists in the series. `Headcount` had real trend and seasonality, so each added capability (trend in Phase 3, proper seasonal modeling in Phase 4) kept unlocking real accuracy. `Attrition_Rate_Pct` is dominated by genuine, provable randomness, so no amount of added modeling machinery could manufacture signal that isn't there - and the single most reliable lesson of the whole project is that "more sophisticated" and "more accurate" are only the same thing when there's real signal for the sophistication to find.
+
+## 7. Repo structure
 
 ```
 ARIMA/
@@ -267,7 +287,7 @@ ARIMA/
     └── metrics_phase*.csv    # per-phase comparison tables
 ```
 
-## 7. Next steps checklist
+## 8. Next steps checklist
 
 - [x] `git init`, push `README.md` + `data/` as the first commit
 - [x] Phase 1 EDA notebook
