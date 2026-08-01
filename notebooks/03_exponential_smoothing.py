@@ -134,13 +134,20 @@ out_csv = os.path.join(BASE_DIR, "..", "results", "metrics_phase3_exp_smoothing.
 results.to_csv(out_csv, index=False)
 print(f"\nSaved {out_csv}")
 
-# Direct callback to Phase 2's static demo - is this actually better than a frozen average?
-hc_static_rmse = 34.4308  # Phase 2 cell 9: static flat SMA(12) on Headcount
-hc_best = results[results["Target"] == "Headcount"].iloc[0]
-print(f"\nRecall Phase 2's STATIC flat SMA(12) forecast for Headcount: RMSE = {hc_static_rmse:.2f}")
-print(f"Best exponential smoothing method for Headcount: {hc_best['Method']}  RMSE = {hc_best['RMSE']:.2f}")
-print(f"-> {'Better' if hc_best['RMSE'] < hc_static_rmse else 'NOT better'} than the frozen average, "
-      "under the exact same 'fit once, never update' conditions.")
+# %% Full-circle comparison: best exp-smoothing method vs. a static moving-average baseline, BOTH targets
+# Recomputed fresh here (not hardcoded from Phase 2's notebook) so this stays correct even if Phase 2
+# changes later, and so Attrition gets the same fair, apples-to-apples baseline Headcount already had -
+# same "fit once on train, hold flat for the whole test horizon" rule as every model in this notebook,
+# same idea as Phase 2 cell 9's static demo, just computed for both series instead of only Headcount.
+static_sma12 = {col: pd.Series(train[col].iloc[-12:].mean(), index=test[col].index) for col in TARGETS}
+
+print("Full-circle comparison: best exponential smoothing method vs. a static SMA(12) baseline:")
+for col in TARGETS:
+    static_row = evaluate(test[col], static_sma12[col], f"{col} - STATIC flat SMA(12)")
+    best = results[results["Target"] == col].iloc[0]
+    verdict = "beats" if best["RMSE"] < static_row["RMSE"] else "does NOT beat"
+    print(f"{col}: static SMA(12) RMSE={static_row['RMSE']:.3f}  vs.  best exp-smoothing "
+          f"({best['Method'].split(' - ')[1]}) RMSE={best['RMSE']:.3f}  -> exp-smoothing {verdict} the static baseline\n")
 
 # %% Plot: actual vs each exponential smoothing forecast
 # Zoomed to the last 12 months of training + all 24 test months, so the
