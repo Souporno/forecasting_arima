@@ -120,7 +120,7 @@ for col in TARGETS:
     fc = model.forecast(TEST_MONTHS)
     fc.index = test[col].index
     ar_forecasts[col] = fc
-    print(f"{col}: AR({o['p']}) fit, AIC={model.aic:.2f}")
+    print(f"{col}: AR({o['p']}) fit, AIC={model.aic:.2f}  BIC={model.bic:.2f}")
     print(model.params.round(4).to_string())
     print()
 
@@ -133,7 +133,7 @@ for col in TARGETS:
     fc = model.forecast(TEST_MONTHS)
     fc.index = test[col].index
     ma_forecasts[col] = fc
-    print(f"{col}: MA({o['q']}) fit, AIC={model.aic:.2f}")
+    print(f"{col}: MA({o['q']}) fit, AIC={model.aic:.2f}  BIC={model.bic:.2f}")
     print(model.params.round(4).to_string())
     print()
 
@@ -146,11 +146,16 @@ for col in TARGETS:
     fc = model.forecast(TEST_MONTHS)
     fc.index = test[col].index
     arima_forecasts[col] = fc
-    print(f"{col}: ARIMA({o['p']},{o['d']},{o['q']}) fit, AIC={model.aic:.2f}")
+    print(f"{col}: ARIMA({o['p']},{o['d']},{o['q']}) fit, AIC={model.aic:.2f}  BIC={model.bic:.2f}")
 
-print("\nAIC comparison (lower = better fit, penalized for extra parameters):")
+# AIC and BIC are both -2*log-likelihood + a penalty per parameter - AIC penalizes
+# each parameter by 2, BIC by log(n) (~5.4 here, with n=216 training months), so
+# BIC punishes extra complexity roughly 2.7x harder than AIC does. Printed side by
+# side so it's visible when they'd pick a different "best" model.
+print("\nAIC/BIC comparison (lower = better; BIC penalizes extra parameters more harshly than AIC):")
 for col in TARGETS:
-    print(f"{col}: AR={ar_models[col].aic:.2f}  MA={ma_models[col].aic:.2f}  ARIMA={arima_models[col].aic:.2f}")
+    print(f"{col}: AIC -> AR={ar_models[col].aic:.2f}  MA={ma_models[col].aic:.2f}  ARIMA={arima_models[col].aic:.2f}")
+    print(f"{' ' * len(col)}  BIC -> AR={ar_models[col].bic:.2f}  MA={ma_models[col].bic:.2f}  ARIMA={arima_models[col].bic:.2f}")
 
 # %% Method 4 - SARIMAX: add a seasonal layer (period=12), since Phase 1 confirmed
 # real yearly seasonality that non-seasonal differencing doesn't touch.
@@ -170,7 +175,7 @@ for col in TARGETS:
     fc = model.get_forecast(TEST_MONTHS).predicted_mean
     fc.index = test[col].index
     sarimax_forecasts[col] = fc
-    print(f"{col}: SARIMAX({o['p']},{o['d']},{o['q']})x{SEASONAL_ORDER} fit, AIC={model.aic:.2f}")
+    print(f"{col}: SARIMAX({o['p']},{o['d']},{o['q']})x{SEASONAL_ORDER} fit, AIC={model.aic:.2f}  BIC={model.bic:.2f}")
 
 # %% Method 5 - Cross-check: pmdarima.auto_arima's own search, vs. the manual picks above
 auto_forecasts, auto_models = {}, {}
@@ -183,7 +188,8 @@ for col in TARGETS:
     auto_models[col] = model
     fc = pd.Series(model.predict(TEST_MONTHS).values, index=test[col].index)
     auto_forecasts[col] = fc
-    print(f"{col}: auto_arima picked order={model.order}  seasonal_order={model.seasonal_order}  AIC={model.aic():.2f}")
+    print(f"{col}: auto_arima picked order={model.order}  seasonal_order={model.seasonal_order}  "
+          f"AIC={model.aic():.2f}  BIC={model.bic():.2f}")
     print(f"       (manual pick was order=({orders[col]['p']},{orders[col]['d']},{orders[col]['q']})  "
           f"seasonal_order={SEASONAL_ORDER})")
 
