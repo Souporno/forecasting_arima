@@ -56,7 +56,7 @@ Sanity-checked: no negative values, headcount = prior headcount + hires − term
 
 ## 4. Key concepts, explained simply
 
-This project leans on a handful of core time-series ideas. If you're new to this, read this section before the notebooks — everything below was worked out interactively while building Phase 1 (`notebooks/01_eda.ipynb`), so it doubles as a walkthrough of *why* that notebook does what it does.
+This project leans on a handful of core time-series ideas. If you're new to this, read this section before the notebooks — everything below was worked out interactively while building Phase 1 (`notebooks/01_eda.ipynb`) and Phase 2 (`notebooks/02_moving_average.ipynb`), so it doubles as a walkthrough of *why* those notebooks do what they do.
 
 ### Stationarity
 
@@ -107,13 +107,41 @@ All of these are fundamentally driven by random shocks (`E(t)`); they differ in 
 
 **Naming trap:** "moving average" as a simple forecasting baseline (Phase 2 below — literally averaging the last N actual values to predict the next one) and the "MA" inside ARMA/ARIMA (modeling today's value from past *forecast errors*, not past actual values) are unrelated ideas that happen to share a name. Different math, different purpose — don't conflate them.
 
+### Data leakage, and why every forecast column gets `.shift(1)`
+
+A "forecast" for May built from May's own actual value isn't a forecast — it's May compared to itself, which scores a suspicious, meaningless zero error. `.shift(1)` is what prevents that: it guarantees the number sitting in May's forecast slot is actually April's real value, i.e. only information that would genuinely have existed *before* May happened. This is the general rule against **data leakage** — a prediction for time `t` may only be built from data up through `t-1` — and it's why every baseline in `02_moving_average.ipynb` is built on a shifted column, never the raw one.
+
+### Two unrelated "which past matters" questions: PACF vs. train/test split
+
+Easy to conflate, genuinely separate: **PACF** decides the *structure* of an equation — how many lag terms to include (e.g. "use the last 2 months as predictors"). The **train/test split** decides which *time periods* a model is allowed to see while fitting vs. which are held back to honestly grade it on afterward (216 months to train on, the most recent 24 held out as an exam it can't study from). You'd need the train/test split regardless of how many lags your model uses, and PACF would recommend the same lag count regardless of whether you hold out any test data at all. Independent decisions.
+
+### Trailing vs. centered moving averages — CMA (Phase 1) vs. SMA (Phase 2)
+
+Two different tools that both get called "moving average," easy to conflate: Phase 1's decomposition used a **centered** moving average (data from both *before and after* each point) to describe a smooth trend line after the fact — useless for real forecasting, since on the day you're actually predicting, "after" data doesn't exist yet. Phase 2's SMA is **trailing** (`.shift(1).rolling(w).mean()`) — it only ever looks backward, which is what makes it usable as an actual forecast rather than just a descriptive summary.
+
+### How weights work in SMA vs. WMA
+
+SMA ("simple") has no differentiated weighting at all — every month inside the window counts identically, `1/w` each, and everything outside the window counts `0`. WMA assigns weights `[1, 2, ..., w]` (normalized to sum to 1), so the most recent month in the window counts the most and the oldest counts the least — literally `np.dot(values, weights) / weights.sum()`. Built at matching window sizes on purpose (3/6/12 for both), so that comparing `SMA(w)` to `WMA(w)` isolates exactly one variable — equal weighting vs. recency weighting — instead of mixing that question up with "is this window size any good." Result on this data, cleanly consistent at every window: WMA beats SMA on trending `Headcount` every time (recent = more accurate when trending up), SMA beats WMA on noisy `Attrition_Rate_Pct` every time (no direction to weight toward, so equal weighting cancels more noise).
+
+### MAE vs. RMSE — why `sqrt(mean(x²))` isn't `mean(|x|)`
+
+`sqrt(x²) = |x|` for any single number, so it's natural to expect RMSE and MAE to agree. They don't, because the averaging happens at a different point: RMSE squares every error, **averages the squared values together**, then takes one square root at the end; MAE takes the absolute value of every error and averages those directly. Example — errors `[1, 1, 1, 1, 5]`: MAE = (1+1+1+1+5)/5 = **1.8**. RMSE = √((1+1+1+1+25)/5) = √5.8 = **2.41**. That one error of 5 got squared to 25 — a hugely disproportionate contribution — and once it's mixed into the average with the others, the final square root can only shrink the whole mixture back down, not undo the lopsided contribution from that one term. Rule: **RMSE ≥ MAE always**, equal only when every error is exactly the same size. A bigger RMSE-vs-MAE gap means a few large misses are driving the error, not uniformly mediocre ones.
+
+### Rolling (one-step) vs. static (multi-step) evaluation
+
+Two very different tests of the same method. **Rolling** (Phase 2 cells 3-8): at every point in the test period, forecast just the next month using real, up-to-date actual data — the method gets "refed" fresh information every single month, so even a lagging method can slowly climb along with a real trend. **Static** (Phase 2 cell 9): fit or compute *once*, using only training data, then hold that forecast flat/frozen for the entire test horizon with no updates at all — simulating "build a plan today, never revisit it." On trending `Headcount`, this is brutal: rolling `SMA(12)` scored RMSE 13.39 (still climbing, just lagged); the same method held static scored RMSE 34.43 (2.5× worse — a single frozen number sitting motionless for 2 years while reality climbed 60+ points away from it). Exponential smoothing and ARIMA/SARIMA models (Phases 3-4) are properly *fit* rather than cheaply recomputed, so by convention they're evaluated the static way — fit once on training data, forecast the full horizon in one shot — making Phase 2's static baseline (not the rolling numbers) the fair comparison point for those later phases.
+
+### Why a moving average can never capture trend
+
+Not a tuning problem — a structural one. Averaging discards the *order* values arrived in, keeping only their center: the flat sequence `15.5, 15.5, 15.5, 15.5, 15.5, 15.5` and the steadily climbing sequence `13, 14, 15, 16, 17, 18` both average to exactly **15.5** — indistinguishable to a moving average, even though one is going nowhere and the other should obviously be forecast to hit 19 next. Noticing "this is clearly rising, so it'll keep rising" requires estimating a *slope* (rate of change per month) and projecting it forward — a fundamentally different operation from "add up recent values and divide," which a plain average has no mechanism to do, no matter which window size is chosen. Holt's method (Phase 3) fixes this directly by estimating a level **and** a trend, then forecasting `level + h × trend` — literally the "notice the slope, keep going" logic done properly.
+
 ## 5. Methodology / roadmap
 
 **Phase 1 — EDA & stationarity** (`notebooks/01_eda.ipynb`, done)
 Raw series plots, seasonal decomposition, ADF + KPSS stationarity tests, ACF/PACF plots. Findings: both `Headcount` and `Attrition_Rate_Pct` are non-stationary (Headcount from trend + seasonality; Attrition from seasonality + a slow trend-stationary drift that KPSS catches and ADF misses). PACF cuts off around lag 2-3 for both, ACF decays gradually — points toward AR(2)/AR(3) as a starting order for Phase 4.
 
-**Phase 2 — Baselines**
-Naive forecast (last value), simple moving average (window sweep, e.g. 3/6/12 month), weighted moving average. These are the floor every later model needs to beat.
+**Phase 2 — Baselines** (`notebooks/02_moving_average.ipynb`, done)
+Naive forecast, simple moving average (3/6/12 month, matching quarterly/half-yearly/annual reporting cadences), weighted moving average (same 3/6/12 windows, recency-weighted). Evaluated two ways: rolling one-step-ahead, and a static multi-step demo. Findings: on trending `Headcount`, less smoothing always wins — Naive beats every SMA/WMA outright, and WMA beats SMA at every matching window (recency-weighting helps when there's a real direction to weight toward). On noisy `Attrition_Rate_Pct`, it inverts — SMA(12) wins overall, and SMA beats WMA at every matching window (no direction to weight toward, so equal weighting cancels more noise). The static demo confirmed this isn't a tuning issue: even the best moving average, frozen and never updated, cannot represent a trend at all (RMSE 13.39 rolling → 34.43 static on Headcount) — a structural ceiling, not something a better window size could fix.
 
 **Phase 3 — Exponential smoothing**
 Simple exponential smoothing → Holt's linear trend method → Holt-Winters seasonal (additive and multiplicative), via `statsmodels.tsa.holtwinters.ExponentialSmoothing`.
@@ -143,23 +171,22 @@ ARIMA/
 │   ├── generate_dataset.py
 │   └── people_analytics_monthly.csv
 ├── notebooks/
-│   ├── 01_eda.ipynb            # done
-│   ├── 02_moving_average.ipynb
+│   ├── 01_eda.ipynb                    # done
+│   ├── 02_moving_average.ipynb         # done
 │   ├── 03_exponential_smoothing.ipynb
 │   └── 04_arima_sarima.ipynb
 ├── src/
-│   ├── metrics.py          # MAE / RMSE / MAPE, backtesting helper
-│   └── plotting.py         # shared forecast-vs-actual plot helper
+│   └── metrics.py           # MAE / RMSE / MAPE, comparison_table helper
 └── results/
-    ├── figures/             # PNGs saved from each notebook
-    └── model_comparison.csv
+    ├── figures/              # PNGs saved from each notebook
+    └── metrics_phase*.csv    # per-phase comparison tables
 ```
 
 ## 7. Next steps checklist
 
 - [x] `git init`, push `README.md` + `data/` as the first commit
 - [x] Phase 1 EDA notebook
-- [ ] Baselines (Phase 2)
+- [x] Baselines (Phase 2)
 - [ ] Exponential smoothing (Phase 3)
 - [ ] AR → MA → ARIMA → SARIMA (Phase 4)
 - [ ] Backtesting + comparison table (Phase 5)
