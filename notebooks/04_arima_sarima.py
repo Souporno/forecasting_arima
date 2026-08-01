@@ -202,7 +202,8 @@ for col in TARGETS:
     rows.append({"Target": col, **evaluate(y_true, ma_forecasts[col], f"{col} - MA({o['q']})")})
     rows.append({"Target": col, **evaluate(y_true, arima_forecasts[col], f"{col} - ARIMA({o['p']},{o['d']},{o['q']})")})
     rows.append({"Target": col, **evaluate(y_true, sarimax_forecasts[col], f"{col} - SARIMAX{SEASONAL_ORDER}")})
-    rows.append({"Target": col, **evaluate(y_true, auto_forecasts[col], f"{col} - auto_arima")})
+    auto_label = f"{col} - auto_arima{auto_models[col].order}x{auto_models[col].seasonal_order}"
+    rows.append({"Target": col, **evaluate(y_true, auto_forecasts[col], auto_label)})
 
 results = comparison_table(rows)
 print("\nPhase 4 comparison, best (lowest RMSE) first within each target:")
