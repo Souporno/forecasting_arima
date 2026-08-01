@@ -47,6 +47,11 @@ def evaluate(y_true, y_pred, label=None):
 
 
 def comparison_table(rows):
-    """rows: list of dicts from evaluate(). Returns a DataFrame sorted best
-    (lowest RMSE) first."""
-    return pd.DataFrame(rows).sort_values("RMSE").reset_index(drop=True)
+    """rows: list of dicts from evaluate(), optionally with extra keys like
+    'Target' or 'Window' mixed in. Returns a DataFrame sorted best (lowest
+    RMSE) first WITHIN each 'Target' group if one is present (so e.g.
+    Headcount rows and Attrition_Rate_Pct rows don't get interleaved just
+    because their RMSE scales differ), otherwise sorted by RMSE alone."""
+    df = pd.DataFrame(rows)
+    sort_cols = [c for c in ["Target", "RMSE"] if c in df.columns]
+    return df.sort_values(sort_cols).reset_index(drop=True)
