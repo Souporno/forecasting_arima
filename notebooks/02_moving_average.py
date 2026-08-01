@@ -96,7 +96,12 @@ for col in TARGETS:
 # Same idea as SMA, but recent months count more. Weights [1, 2, ..., w]
 # normalized to sum to 1, so the most recent of the w months gets the most
 # influence instead of every month counting equally.
-WMA_WINDOW = 6
+#
+# Built at the SAME window sizes as SMA (3/6/12), on purpose: that way every
+# SMA(w) has a matching WMA(w) at an identical window, isolating exactly one
+# variable - equal weighting vs. recency weighting - at each window size,
+# instead of getting just one data point on whether weighting helps.
+WMA_WINDOWS = SMA_WINDOWS  # [3, 6, 12] - deliberately matched to SMA
 
 
 def weighted_moving_average(series, window):
@@ -108,15 +113,18 @@ def weighted_moving_average(series, window):
     return series.shift(1).rolling(window=window).apply(_wavg, raw=True)
 
 
-wma_preds = {col: weighted_moving_average(df[col], WMA_WINDOW) for col in TARGETS}
+wma_preds = {
+    col: {w: weighted_moving_average(df[col], w) for w in WMA_WINDOWS}
+    for col in TARGETS
+}
 
-print(f"WMA preview (rows 10-17) - recent months of the last {WMA_WINDOW} count more than older ones:")
+print("WMA preview (rows 10-17) - one example window (6) shown; also computed at 3 and 12:")
 for col in TARGETS:
     print(f"\n{col}:")
     print(pd.DataFrame({
         f"{col} (actual)": df[col],
-        f"SMA({WMA_WINDOW}) forecast (equal weights, for contrast)": sma_preds[col][6],
-        f"WMA({WMA_WINDOW}) forecast (recent-weighted)": wma_preds[col],
+        "SMA(6) forecast (equal weights, for contrast)": sma_preds[col][6],
+        "WMA(6) forecast (recent-weighted)": wma_preds[col][6],
     }).iloc[10:18])
 
 # %% Evaluate every method on the test period
@@ -132,7 +140,8 @@ for col in TARGETS:
     rows.append({"Target": col, **evaluate(y_true, naive_preds[col].loc[test.index], f"{col} - Naive")})
     for w in SMA_WINDOWS:
         rows.append({"Target": col, **evaluate(y_true, sma_preds[col][w].loc[test.index], f"{col} - SMA({w})")})
-    rows.append({"Target": col, **evaluate(y_true, wma_preds[col].loc[test.index], f"{col} - WMA({WMA_WINDOW})")})
+    for w in WMA_WINDOWS:
+        rows.append({"Target": col, **evaluate(y_true, wma_preds[col][w].loc[test.index], f"{col} - WMA({w})")})
 
 results = comparison_table(rows)  # sorted by Target, then RMSE (best first) within each Target
 print("\nFull comparison, best (lowest RMSE) first within each target:")
@@ -141,6 +150,36 @@ print(results.to_string(index=False))
 out_csv = os.path.join(BASE_DIR, "..", "results", "metrics_phase2_baselines.csv")
 results.to_csv(out_csv, index=False)
 print(f"\nSaved {out_csv}")
+
+# %% Does recency-weighting help consistently across window sizes, or just at one?
+# Head-to-head: SMA(w) vs WMA(w) at each matching window, same target.
+print("\nSMA vs WMA head-to-head, same window sizes:")
+head_to_head = []
+for col in TARGETS:
+    print(f"\n{col}:")
+    for w in SMA_WINDOWS:
+        sma_rmse = results.loc[results["Method"] == f"{col} - SMA({w})", "RMSE"].iloc[0]
+        wma_rmse = results.loc[results["Method"] == f"{col} - WMA({w})", "RMSE"].iloc[0]
+        winner = "WMA" if wma_rmse < sma_rmse else "SMA"
+        print(f"  window={w:>2}:  SMA RMSE={sma_rmse:.3f}   WMA RMSE={wma_rmse:.3f}   -> {winner} wins")
+        head_to_head.append({"Target": col, "Window": w, "SMA_RMSE": sma_rmse, "WMA_RMSE": wma_rmse, "Winner": winner})
+head_to_head = pd.DataFrame(head_to_head)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+x = np.arange(len(SMA_WINDOWS))
+for ax, col in zip(axes, TARGETS):
+    sub = head_to_head[head_to_head["Target"] == col]
+    ax.bar(x - 0.18, sub["SMA_RMSE"], width=0.36, label="SMA")
+    ax.bar(x + 0.18, sub["WMA_RMSE"], width=0.36, label="WMA")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"window={w}" for w in SMA_WINDOWS])
+    ax.set_ylabel("RMSE (lower = better)")
+    ax.set_title(f"{col}: SMA vs WMA at each window")
+    ax.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(FIG_DIR, "06_sma_vs_wma.png"), dpi=150)
+plt.close()
+print("\nSaved 06_sma_vs_wma.png")
 
 # %% Plot: actual vs each rolling one-step forecast, over the test period
 best_sma_window = {col: min(SMA_WINDOWS, key=lambda w: np.abs(sma_preds[col][w].loc[test.index] - test[col]).mean()) for col in TARGETS}
@@ -151,7 +190,7 @@ for ax, col in zip(axes, TARGETS):
     ax.plot(test.index, naive_preds[col].loc[test.index], label="Naive", linestyle="--")
     w = best_sma_window[col]
     ax.plot(test.index, sma_preds[col][w].loc[test.index], label=f"SMA({w})", linestyle="--")
-    ax.plot(test.index, wma_preds[col].loc[test.index], label=f"WMA({WMA_WINDOW})", linestyle="--")
+    ax.plot(test.index, wma_preds[col][w].loc[test.index], label=f"WMA({w})", linestyle="--")
     ax.set_title(f"{col} - rolling one-step forecasts vs actual (test period)")
     ax.legend()
 plt.tight_layout()
