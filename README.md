@@ -233,8 +233,14 @@ Findings, evaluated the same fit-once-forecast-24-months-ahead way as Phase 3: o
 
 On `Attrition_Rate_Pct`, the opposite pattern from Headcount: combining AR+MA *did* help (ARIMA RMSE 0.671, better than AR's 0.713 or MA's 0.727), but the seasonal layer hurt again — SARIMAX RMSE 0.798, worse than plain ARIMA — the same overfitting signature as Holt-Winters in Phase 3 (a real-but-small seasonal effect, over-fit to training data, actively wrong on test data). `auto_arima` won outright here (RMSE **0.643**, best of all Phase 4 methods and a first, if marginal, improvement over Phase 2/3's ~0.665 static-baseline plateau) by picking a deliberately smaller order (0,1,1)x(0,0,1,12) than the manual pick — parsimony winning over the manually-fit model's larger order on a noisy series.
 
-**Phase 5 — Evaluation**
-Rolling-origin (walk-forward) backtesting rather than a single train/test split, since 240 points is small enough to make backtesting cheap. Report MAE, RMSE, and MAPE for every method side by side (naive, moving average, SES/Holt/Holt-Winters, AR, MA, ARIMA, SARIMA), plus a plot of forecasts vs. actuals over the last 24 held-out months.
+**Phase 5 — Rolling-origin backtesting** (`notebooks/05_backtesting.ipynb`, done)
+Every Phase 2-4 result was judged against exactly one train/test split. Phase 5 re-runs every method at 6 expanding-window origins (train through Dec 2019, then walk forward one year at a time, testing on each of 2020-2025 in turn), averaging performance instead of trusting a single window. Naive/SMA(12)/WMA(12) keep their natural rolling one-step evaluation; SES/Holt/Holt-Winters/AR/MA/ARIMA/SARIMAX/auto_arima keep the static fit-once-forecast-12-months convention, with `(p,q)` order re-derived fresh at each origin (revealing that with the smallest training window, Origin 1, both targets' PACF/ACF found no significant lag at all — `p=q=0` — before stabilizing close to Phase 4's values from Origin 2 onward, a real finding about order-selection reliability with limited data).
+
+**Big, important finding: a single-window comparison can be actively misleading.** Restricting to the static-evaluation methods (the fair, apples-to-apples group, since rolling baselines have a built-in advantage from being fed real data every month — see below): on `Headcount`, SARIMAX **does** hold up as the backtest champion, agreeing with Phase 4 — but its *average* performance across 6 origins (RMSE 6.43 ± 6.02) is far more modest than its single-window result (RMSE 3.02), and its large standard deviation reveals real inconsistency across origins, not the dominant, stable win Phase 4 alone suggested. On `Attrition_Rate_Pct`, the single-split champion **does not** hold up at all: `auto_arima` won Phase 4's one test window (RMSE 0.643), but averaged across 6 origins it drops to third place (RMSE 0.923) — plain **SES** (RMSE 0.867) is the real backtest champion, exactly confirming the concern raised before building this phase (that Attrition's single-window margins were narrow enough to be luck, not a reliable edge).
+
+**A second, unplanned finding, worth being transparent about:** in the *full* leaderboard (including Naive/SMA/WMA), Naive wins Headcount outright (RMSE 3.58) — but this isn't really a fair fight. Naive/SMA/WMA are evaluated rolling (refed real actuals every month within the test window), while every fitted method is evaluated static (forecast 12 months blind, no updates) — the same rolling-vs-static gap Phase 2 already demonstrated (rolling SMA(12) RMSE 13.39 vs. the same method held static, RMSE 34.43). Comparing across that gap answers "does getting fed real data monthly help" (yes, a lot — already known), not "which method understands the data best" — which is why the notebook reports both the full leaderboard and a static-only one, and treats the static-only comparison as the fair reference point.
+
+Full leaderboard, results/figures: `results/metrics_phase5_backtest_detail.csv` (every origin × target × method), `results/metrics_phase5_backtest_summary.csv` (averaged), `09_backtest_rmse_by_origin.png` (consistency across origins), `10_backtest_leaderboard.png` (final ranked bar chart with error bars).
 
 **Phase 6 — Stretch goals**
 Prophet or a simple LSTM as an outside comparison; anomaly/changepoint detection to auto-flag the 2009/2020 shocks; a small Streamlit app to interactively forecast N months ahead; GitHub Actions to re-run the notebook on push.
@@ -252,7 +258,8 @@ ARIMA/
 │   ├── 01_eda.ipynb                    # done
 │   ├── 02_moving_average.ipynb         # done
 │   ├── 03_exponential_smoothing.ipynb  # done
-│   └── 04_arima_sarima.ipynb           # done
+│   ├── 04_arima_sarima.ipynb           # done
+│   └── 05_backtesting.ipynb            # done
 ├── src/
 │   └── metrics.py           # MAE / RMSE / MAPE, comparison_table helper
 └── results/
@@ -267,8 +274,8 @@ ARIMA/
 - [x] Baselines (Phase 2)
 - [x] Exponential smoothing (Phase 3)
 - [x] AR → MA → ARIMA → SARIMA (Phase 4)
-- [ ] Backtesting + comparison table (Phase 5)
-- [ ] Write up findings in README ("which model won, and why")
+- [x] Backtesting + comparison table (Phase 5)
+- [x] Write up findings in README ("which model won, and why")
 - [ ] Pick a stretch goal (Phase 6) if there's time left
 
 ## Tech stack
