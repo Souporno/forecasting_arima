@@ -72,18 +72,18 @@ for col in TARGETS:
 # shift(1) first (don't peek at the value we're trying to predict), then
 # .rolling(w).mean() averages the w actual values before that.
 #
-# Window choice: rather than hand-picking "round" numbers like 3/6/12
-# (quarter/half-year/year) and hoping they're good, sweep every window from
-# 2 to 18 months and let cell 6's evaluation find the actual best one - see
-# the RMSE-vs-window plot later in this notebook for the data-driven answer.
-SMA_WINDOWS = list(range(2, 19))
+# Window choice: 3/6/12 months - quarterly, half-yearly, annual. These are
+# the natural reporting cadences a People Analytics team would already be
+# looking at (quarterly business reviews, half-year/annual HR cycles), so
+# they double as a sanity check on whether "the cadence you'd naturally
+# report on" also happens to forecast well.
+SMA_WINDOWS = [3, 6, 12]
 sma_preds = {
     col: {w: df[col].shift(1).rolling(window=w).mean() for w in SMA_WINDOWS}
     for col in TARGETS
 }
 
-print(f"Computed SMA forecasts for {len(SMA_WINDOWS)} window sizes ({min(SMA_WINDOWS)}-{max(SMA_WINDOWS)} months) per target.")
-print("Preview (rows 10-17) - just 2 of those windows shown side by side, small vs large:")
+print("SMA preview (rows 10-17) - small window (3) vs large window (12), side by side:")
 for col in TARGETS:
     print(f"\n{col}:")
     print(pd.DataFrame({
@@ -131,48 +131,19 @@ for col in TARGETS:
 
     rows.append({"Target": col, **evaluate(y_true, naive_preds[col].loc[test.index], f"{col} - Naive")})
     for w in SMA_WINDOWS:
-        row = {"Target": col, "Window": w, **evaluate(y_true, sma_preds[col][w].loc[test.index], f"{col} - SMA({w})")}
-        rows.append(row)
+        rows.append({"Target": col, **evaluate(y_true, sma_preds[col][w].loc[test.index], f"{col} - SMA({w})")})
     rows.append({"Target": col, **evaluate(y_true, wma_preds[col].loc[test.index], f"{col} - WMA({WMA_WINDOW})")})
 
 results = comparison_table(rows)  # sorted by Target, then RMSE (best first) within each Target
 print("\nFull comparison, best (lowest RMSE) first within each target:")
-print(results.drop(columns="Window").to_string(index=False))
+print(results.to_string(index=False))
 
 out_csv = os.path.join(BASE_DIR, "..", "results", "metrics_phase2_baselines.csv")
 results.to_csv(out_csv, index=False)
 print(f"\nSaved {out_csv}")
 
-# %% Answering "why these window sizes" properly: RMSE vs. window size, swept
-sma_results = results[results["Window"].notna()].copy()
-fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-for ax, col in zip(axes, TARGETS):
-    sub = sma_results[sma_results["Target"] == col].sort_values("Window")
-    ax.plot(sub["Window"], sub["RMSE"], marker="o")
-    best = sub.loc[sub["RMSE"].idxmin()]
-    ax.scatter([best["Window"]], [best["RMSE"]], color="red", zorder=5, label=f"best: window={int(best['Window'])}")
-    ax.set_xlabel("SMA window (months)")
-    ax.set_ylabel("RMSE (lower = better)")
-    ax.set_title(f"{col}: RMSE vs. SMA window size")
-    ax.legend()
-plt.tight_layout()
-plt.savefig(os.path.join(FIG_DIR, "06_sma_window_sweep.png"), dpi=150)
-plt.close()
-
-for col in TARGETS:
-    sub = sma_results[sma_results["Target"] == col]
-    best = sub.loc[sub["RMSE"].idxmin()]
-    print(f"{col}: data-driven best SMA window = {int(best['Window'])} months (RMSE={best['RMSE']:.3f}) "
-          f"out of {sub['Window'].min():.0f}-{sub['Window'].max():.0f} swept")
-print("Saved 06_sma_window_sweep.png")
-
 # %% Plot: actual vs each rolling one-step forecast, over the test period
-# Reuse the RMSE-minimizing window found by the sweep above, so this plot is
-# showing the same "best" window the numbers actually picked.
-best_sma_window = {
-    col: int(sma_results[sma_results["Target"] == col].loc[sma_results[sma_results["Target"] == col]["RMSE"].idxmin(), "Window"])
-    for col in TARGETS
-}
+best_sma_window = {col: min(SMA_WINDOWS, key=lambda w: np.abs(sma_preds[col][w].loc[test.index] - test[col]).mean()) for col in TARGETS}
 
 fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=False)
 for ax, col in zip(axes, TARGETS):
