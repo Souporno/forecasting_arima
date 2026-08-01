@@ -135,6 +135,32 @@ Two very different tests of the same method. **Rolling** (Phase 2 cells 3-8): at
 
 Not a tuning problem — a structural one. Averaging discards the *order* values arrived in, keeping only their center: the flat sequence `15.5, 15.5, 15.5, 15.5, 15.5, 15.5` and the steadily climbing sequence `13, 14, 15, 16, 17, 18` both average to exactly **15.5** — indistinguishable to a moving average, even though one is going nowhere and the other should obviously be forecast to hit 19 next. Noticing "this is clearly rising, so it'll keep rising" requires estimating a *slope* (rate of change per month) and projecting it forward — a fundamentally different operation from "add up recent values and divide," which a plain average has no mechanism to do, no matter which window size is chosen. Holt's method (Phase 3) fixes this directly by estimating a level **and** a trend, then forecasting `level + h × trend` — literally the "notice the slope, keep going" logic done properly.
 
+### Exponential smoothing — how the level updates, one step at a time
+
+`SimpleExpSmoothing.fit(optimized=True)` doesn't hand-pick alpha (the smoothing constant) — it numerically searches for whichever alpha minimizes forecast error *on the training data itself*, the same kind of optimization a regression uses to pick its coefficients, just for one parameter instead of many. Once fit, the update rule is: `level(t) = alpha × actual(t) + (1 − alpha) × level(t−1)` — each new level is built only from this month's real value and the previous level, nothing further back gets re-touched. Concretely, with alpha = 0.3 and a starting level of 100: if this month's actual comes in at 130, the new level becomes `0.3 × 130 + 0.7 × 100 = 109` — nudged toward the new observation, not jumped to it. A higher alpha nudges harder (more trust in the newest point, faster-reacting, noisier); a lower alpha barely moves (smoother, slower to react). SES forecasts by freezing that final level and repeating it flat for every future month — which is exactly why it has the same trend-blindness as a moving average, just computed differently. That blindness is the point of including SES here: it proves "exponential smoothing" per se isn't what fixes trend-blindness, the *trend term* Holt adds next is.
+
+On this data, SES's fitted alpha differs sharply by target: `Headcount` alpha = **1.0000** (mathematically collapses to the naive forecast — trust only the most recent value, ignore everything older, because Headcount barely wobbles month to month once you're inside a trend, so "the most recent point" is already the best available estimate), `Attrition_Rate_Pct` alpha = **0.1753** (barely react at all — because Attrition is noisy, over-trusting any single recent point would just chase noise, so the optimizer settled on relying mostly on a slow-moving historical average instead).
+
+### Holt's linear trend method — adding a second moving part
+
+Holt adds a second smoothed quantity, the trend, updated the same recursive way as the level: `trend(t) = beta × (level(t) − level(t−1)) + (1 − beta) × trend(t−1)`. The forecast for `h` months ahead is then `level + h × trend` — a straight line extrapolated forward from the last fitted level and slope. On `Headcount`, alpha = beta = 0.6596 and Holt clearly beats SES: RMSE 14.32 vs. 30.03, MAE 11.73 vs. 25.42 — adding the ability to keep climbing instead of freezing flat matters a lot on a genuinely trending series. On `Attrition_Rate_Pct`, beta fit to **0.0000** — the optimizer decided a trend term adds nothing (there's no real slope to a series that oscillates without ever committing to a direction), and with the trend term switched off, Holt collapses back to being SES with slightly different rounding, which is exactly why Holt only barely underperforms SES there (RMSE 0.685 vs. 0.666) rather than being dramatically better or worse — it isn't really doing anything different.
+
+### Holt-Winters — why gamma fit to 0 even though seasonality is real
+
+Adding `trend="add", seasonal="add", seasonal_periods=12` gives Holt-Winters a third smoothed quantity, gamma, meant to track a repeating 12-month shape the same way alpha tracks the level and beta tracks the trend. On both targets here, gamma fit to **0.0000** — surprising at first, since Phase 1's decomposition confirmed both series really do have yearly seasonality. The resolution: gamma near 0 doesn't mean "no seasonality exists," it means "the seasonal component isn't worth actively re-estimating every period." `initialization_method="estimated"` already bakes a reasonable starting seasonal shape into the model from the training data before optimization even begins — if that starting shape is already a decent fit, the optimizer has little incentive to keep adjusting it, so gamma gets pushed toward 0 and the initial seasonal estimate rides along mostly frozen for the whole forecast. That's a difference from beta on Attrition, where beta = 0 meant "there really is no trend to model" — here gamma = 0 means "the seasonal pattern is real, but already captured once at initialization; continuously re-fitting it during the optimization isn't earning its keep."
+
+For `Headcount`, this is mostly harmless — the frozen seasonal shape from initialization is small and the trend term is doing the heavy lifting anyway, so Holt-Winters (RMSE 13.57) still edges out plain Holt (RMSE 14.32) with a modest assist from the seasonal shape. For `Attrition_Rate_Pct`, it's actively harmful: RMSE goes from SES's 0.666 up to Holt-Winters's **0.830** — the worst of all three methods. Here's why gamma freezing at 0 doesn't save it: the frozen seasonal shape is *fixed*, but the model still forecasts `level + seasonal[month]` — a rigid extra offset it can never adjust away, even if the exact position of the real spikes and dips shifts slightly year to year, which they do on a genuinely noisy series. So Holt-Winters is worse not because it's actively re-chasing noise (gamma = 0 means it isn't), but because it committed to one specific seasonal offset pattern up front and now can't undo it when reality doesn't line up with that exact shape.
+
+### What this looks like when overfitting happens — a concrete example from this data
+
+Overfitting: a model spends its limited "fitting power" matching patterns in the training data that don't generalize, and ends up *worse* on new data than a simpler model that didn't try. Attrition's Holt-Winters result is a clean, visual example. It has more moving parts than SES (level + trend + season vs. just level), so it can match more of what it saw during training. The seasonal shape it locked onto is real in a weak statistical sense — Phase 1 confirmed genuine yearly seasonality — but it's a small effect sitting on top of a lot of month-to-month noise, and the shape estimated from 18 years of training data doesn't line up precisely with where the swings land in the 24 held-out test months. Plotted out (`07_exp_smoothing_forecasts.png`), Holt-Winters is visibly the most "active" line — wiggling up and down chasing that seasonal cycle — while SES just sits flat. The wiggle looks more sophisticated, like it's trying harder to track the real swings (which whip between roughly 1.0% and 3.6%). But the numbers say the opposite: RMSE went from 0.666 (SES, flat) to 0.830 (Holt-Winters, wiggling) — worse, not better. The general tell to watch for going forward: whenever a fancier, more-parameterized model scores worse than a simpler one *on the test set* (not the training set), that's the signature to check for overfitting — especially on a series like Attrition where noise dominates whatever real signal exists.
+
+### Fit-once-and-freeze vs. rolling: why Phase 3 changes the evaluation rule
+
+Phase 2's naive/SMA/WMA are cheap arithmetic, recomputed fresh every month using real, up-to-date test-period data (rolling one-step-ahead). Phase 3's models are properly *fit* — parameters like alpha/beta/gamma are estimated once via numerical optimization on the training data, then `.forecast(24)` projects the entire test horizon in a single shot with no updates. That's the same "commit once, never revisit" setup as Phase 2's static demo, not its rolling cells — which makes Phase 2's **static** flat-SMA(12) baseline (Headcount RMSE 34.43, Attrition RMSE 0.665) the fair number for Phase 3 to beat, not the rolling numbers.
+
+The final scorecard: on `Headcount`, Holt-Winters (RMSE 13.57) clearly beats the static baseline (34.43) — a real, decisive win, exponential smoothing earns its complexity here. On `Attrition_Rate_Pct`, the best method (SES, RMSE 0.666) is statistically tied with the static baseline (0.665) — essentially no improvement at all. Consistent with everything above: when there's a real trend/seasonal signal to exploit (Headcount), more sophisticated methods pay off; when a series is dominated by noise (Attrition), no amount of extra modeling machinery manufactures signal that isn't there, and the honest, useful lesson is that a dumb flat average was already about as good as it gets.
+
 ## 5. Methodology / roadmap
 
 **Phase 1 — EDA & stationarity** (`notebooks/01_eda.ipynb`, done)
@@ -143,17 +169,20 @@ Raw series plots, seasonal decomposition, ADF + KPSS stationarity tests, ACF/PAC
 **Phase 2 — Baselines** (`notebooks/02_moving_average.ipynb`, done)
 Naive forecast, simple moving average (3/6/12 month, matching quarterly/half-yearly/annual reporting cadences), weighted moving average (same 3/6/12 windows, recency-weighted). Evaluated two ways: rolling one-step-ahead, and a static multi-step demo. Findings: on trending `Headcount`, less smoothing always wins — Naive beats every SMA/WMA outright, and WMA beats SMA at every matching window (recency-weighting helps when there's a real direction to weight toward). On noisy `Attrition_Rate_Pct`, it inverts — SMA(12) wins overall, and SMA beats WMA at every matching window (no direction to weight toward, so equal weighting cancels more noise). The static demo confirmed this isn't a tuning issue: even the best moving average, frozen and never updated, cannot represent a trend at all (RMSE 13.39 rolling → 34.43 static on Headcount) — a structural ceiling, not something a better window size could fix.
 
-**Phase 3 — Exponential smoothing**
-Simple exponential smoothing → Holt's linear trend method → Holt-Winters seasonal (additive and multiplicative), via `statsmodels.tsa.holtwinters.ExponentialSmoothing`.
+**Phase 3 — Exponential smoothing** (`notebooks/03_exponential_smoothing.ipynb`, done)
+Simple exponential smoothing → Holt's linear trend method → Holt-Winters seasonal, via `statsmodels.tsa.holtwinters`. Evaluated in fit-once-forecast-24-months-ahead mode (not rolling — see "Fit-once-and-freeze vs. rolling" above), against Phase 2's static baseline. Findings: on `Headcount`, each added capability helped — SES (alpha=1.0, collapses to naive) RMSE 30.03 → Holt (alpha=beta=0.66, adds trend) RMSE 14.32 → Holt-Winters (adds a small seasonal assist) RMSE 13.57 — comfortably beating Phase 2's static baseline of 34.43. On `Attrition_Rate_Pct`, the opposite: SES (alpha=0.175, mostly ignores recent noise) RMSE 0.666 was already about as good as Phase 2's static baseline (0.665), Holt's trend term fit to beta=0 (no real slope to model) barely changed anything, and Holt-Winters's frozen seasonal offset (gamma=0) actively hurt, RMSE 0.830 — a clean example of overfitting: more model complexity chasing a real-but-small seasonal signal, scoring worse on held-out data than the simplest method.
 
-**Phase 4 — AR → MA → ARIMA → SARIMA**
-Built up one piece at a time rather than jumping straight to the combined model:
-1. Fit a pure **AR(p)** model (`ARIMA(p, d, 0)`) using the order suggested by Phase 1's PACF.
-2. Fit a pure **MA(q)** model (`ARIMA(0, d, q)`) using the order suggested by Phase 1's ACF.
-3. Combine into full **ARIMA(p, d, q)** and compare against the two pure versions — does combining actually help, or was one component doing all the work?
-4. Extend to **SARIMAX** with a seasonal order (seasonal period = 12), since Phase 1 confirmed real seasonality in both target series.
-5. Cross-check manual order selection against `pmdarima.auto_arima`.
-6. Stretch: refit SARIMAX with `Avg_Engagement_Score` or `Open_Requisitions` as an exogenous regressor.
+**Phase 4 — AR → MA → ARIMA → SARIMA** (`notebooks/04_arima_sarima.ipynb`, done)
+Built up one piece at a time rather than jumping straight to the combined model, with (p, d, q) chosen from PACF/ACF cutoffs computed fresh on the training split (not read off Phase 1's plots — order selection is a modeling decision and shouldn't be informed by data used for anything else): `Headcount` → (p,d,q)=(3,1,5), `Attrition_Rate_Pct` → (3,0,6).
+1. Pure **AR(p)** (`ARIMA(p, d, 0)`).
+2. Pure **MA(q)** (`ARIMA(0, d, q)`).
+3. Combined **ARIMA(p, d, q)** — does combining actually help, or was one component doing all the work?
+4. **SARIMAX** with seasonal order (1,1,1,12), since Phase 1 confirmed real seasonality in both targets.
+5. Cross-check against `pmdarima.auto_arima`'s own automated search.
+
+Findings, evaluated the same fit-once-forecast-24-months-ahead way as Phase 3: on `Headcount`, combining didn't help — pure AR(3) (RMSE 23.54) actually beat the combined ARIMA(3,1,5) (RMSE 25.83), which beat pure MA(5) (RMSE 28.89) — extra MA terms added complexity without adding accuracy. The seasonal layer, though, was decisive: SARIMAX RMSE **3.02**, by far the best result across every phase so far (vs. Phase 3's best of 13.57 and Phase 2's static baseline of 34.43). `auto_arima` picked a smaller seasonal order here and landed at RMSE 10.79 — worse than the manual pick on both AIC and test RMSE, because its search didn't apply seasonal differencing (D=0) the way the manual (1,1,1,12) order did.
+
+On `Attrition_Rate_Pct`, the opposite pattern from Headcount: combining AR+MA *did* help (ARIMA RMSE 0.671, better than AR's 0.713 or MA's 0.727), but the seasonal layer hurt again — SARIMAX RMSE 0.798, worse than plain ARIMA — the same overfitting signature as Holt-Winters in Phase 3 (a real-but-small seasonal effect, over-fit to training data, actively wrong on test data). `auto_arima` won outright here (RMSE **0.643**, best of all Phase 4 methods and a first, if marginal, improvement over Phase 2/3's ~0.665 static-baseline plateau) by picking a deliberately smaller order (0,1,1)x(0,0,1,12) than the manual pick — parsimony winning over the manually-fit model's larger order on a noisy series.
 
 **Phase 5 — Evaluation**
 Rolling-origin (walk-forward) backtesting rather than a single train/test split, since 240 points is small enough to make backtesting cheap. Report MAE, RMSE, and MAPE for every method side by side (naive, moving average, SES/Holt/Holt-Winters, AR, MA, ARIMA, SARIMA), plus a plot of forecasts vs. actuals over the last 24 held-out months.
@@ -173,8 +202,8 @@ ARIMA/
 ├── notebooks/
 │   ├── 01_eda.ipynb                    # done
 │   ├── 02_moving_average.ipynb         # done
-│   ├── 03_exponential_smoothing.ipynb
-│   └── 04_arima_sarima.ipynb
+│   ├── 03_exponential_smoothing.ipynb  # done
+│   └── 04_arima_sarima.ipynb           # done
 ├── src/
 │   └── metrics.py           # MAE / RMSE / MAPE, comparison_table helper
 └── results/
@@ -187,8 +216,8 @@ ARIMA/
 - [x] `git init`, push `README.md` + `data/` as the first commit
 - [x] Phase 1 EDA notebook
 - [x] Baselines (Phase 2)
-- [ ] Exponential smoothing (Phase 3)
-- [ ] AR → MA → ARIMA → SARIMA (Phase 4)
+- [x] Exponential smoothing (Phase 3)
+- [x] AR → MA → ARIMA → SARIMA (Phase 4)
 - [ ] Backtesting + comparison table (Phase 5)
 - [ ] Write up findings in README ("which model won, and why")
 - [ ] Pick a stretch goal (Phase 6) if there's time left
